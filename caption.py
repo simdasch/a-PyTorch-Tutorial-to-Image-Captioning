@@ -1,3 +1,4 @@
+from pathlib import Path
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -7,7 +8,7 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import skimage.transform
 import argparse
-from scipy.misc import imread, imresize
+# from scipy.misc import imread, imresize
 from PIL import Image
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -29,11 +30,14 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
     vocab_size = len(word_map)
 
     # Read image and process
-    img = imread(image_path)
-    if len(img.shape) == 2:
-        img = img[:, :, np.newaxis]
-        img = np.concatenate([img, img, img], axis=2)
-    img = imresize(img, (256, 256))
+    # img = imread(image_path)
+    # if len(img.shape) == 2:
+    #     img = img[:, :, np.newaxis]
+    #     img = np.concatenate([img, img, img], axis=2)
+    img = Image.open(image_path)
+    img = img.resize((256, 256))
+    img = np.array(img)
+    # img = imresize(img, (256, 256))
     img = img.transpose(2, 0, 1)
     img = img / 255.
     img = torch.FloatTensor(img).to(device)
@@ -104,7 +108,8 @@ def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=
             top_k_scores, top_k_words = scores.view(-1).topk(k, 0, True, True)  # (s)
 
         # Convert unrolled indices to actual indices of scores
-        prev_word_inds = top_k_words / vocab_size  # (s)
+        # prev_word_inds = top_k_words / vocab_size  # (s)
+        prev_word_inds = torch.div(top_k_words, vocab_size, rounding_mode='trunc')  # fix for pytorch > 0.4.0
         next_word_inds = top_k_words % vocab_size  # (s)
 
         # Add new words to sequences, alphas
@@ -186,11 +191,12 @@ def visualize_att(image_path, seq, alphas, rev_word_map, smooth=True):
 
 
 if __name__ == '__main__':
+    ROOT = Path(__file__).parent
     parser = argparse.ArgumentParser(description='Show, Attend, and Tell - Tutorial - Generate Caption')
 
-    parser.add_argument('--img', '-i', help='path to image')
-    parser.add_argument('--model', '-m', help='path to model')
-    parser.add_argument('--word_map', '-wm', help='path to word map JSON')
+    parser.add_argument('--img', '-i', help='path to image', default=str(ROOT / 'images/test_03__001_2021_11_insp_vatertag_thementeaser_querformat_125642.jpg'))
+    parser.add_argument('--model', '-m', help='path to model', default=str(ROOT / 'checkpoint/BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'))
+    parser.add_argument('--word_map', '-wm', help='path to word map JSON', default=str(ROOT / 'checkpoint/WORDMAP_coco_5_cap_per_img_5_min_word_freq.json'))
     parser.add_argument('--beam_size', '-b', default=5, type=int, help='beam size for beam search')
     parser.add_argument('--dont_smooth', dest='smooth', action='store_false', help='do not smooth alpha overlay')
 
