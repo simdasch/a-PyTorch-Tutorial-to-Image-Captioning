@@ -1,5 +1,6 @@
 from pathlib import Path
-from typing import NamedTuple
+from functools import cmp_to_key
+import attr
 import math
 import json
 
@@ -11,17 +12,32 @@ from PIL import Image
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# class Tag(NamedTuple):
-#     tag: str
-#     word_score: float
-#     caption_score: float
 
-
+@attr.s(auto_attribs=True)
 class Tag:
-    def __init__(self, tag_, word_score_, caption_score_):
-        self.tag = tag_
-        self.caption_score = caption_score_
-        self.word_score = word_score_
+    tag: str
+    caption_score: float
+    word_score: float
+    caption_length: int
+    caption_index: int
+
+    @property
+    def score(self):
+        return self.caption_score*100 + self.word_score
+
+    @property
+    def caption_score_compensated(self):
+        """ note: the caption score is a sum of logarithmic values"""
+        return self.caption_score ** (1./self.caption_length)
+
+
+def compare_tags(tag1: Tag, tag2: Tag):
+    if tag1.caption_score < tag2.caption_score:
+        return -1
+    if tag1.caption_score > tag2.caption_score:
+        return 1
+
+    return -1 if tag1.word_score < tag2.word_score else 1
 
 
 def caption_image_beam_search(encoder, decoder, image_path, word_map, beam_size=3):
@@ -182,51 +198,80 @@ def get_tags_from_captions(captions, scores_per_caption, scores_per_word):
     :param captions: the different captions (list[list[str]])
     :param scores_per_caption: the log score of the captions (list[float])
     :param scores_per_word:  the log score of the individual words in the captions (list[list[float]])
-    :return:
+    :return: list of ordered tags
     """
 
-    non_wanted_words = {'<start>', '<end>',
-                        'a', 'with', 'of', 'on', 'the', 'to', 'and', 'in', 'is', 'her', 'his', 'there', 'that', 'an',
-                        'next', 'who', 'while', 'at', 'he', 'she', 'up', 'using', 'each', 'other', 'are', 'something'}
+    non_wanted_words = get_non_wanted_tags()
 
     tags = dict()
-    for words, word_scores, caption_score in zip(captions, scores_per_word, scores_per_caption):
+    for i, (words, word_scores, caption_score) in enumerate(zip(captions, scores_per_word, scores_per_caption)):
         caption_score = math.exp(caption_score)
+        caption_length = len(words)
         for word, word_score in zip(words, word_scores):
             if word not in non_wanted_words:
                 word_score = math.exp(word_score)
                 if word not in tags:
-                    tags[word] = Tag(word, word_score, caption_score)
+                    tags[word] = Tag(tag=word, word_score=word_score, caption_score=caption_score,
+                                     caption_length=caption_length, caption_index=i)
                 else:
-                    tags[word].word_score = max(word_score, tags[word].word_score)
-                    tags[word].caption_score = max(caption_score, tags[word].caption_score)
+                    # if word_score > tags[word].word_score:
+                    #     tags[word].word_score = word_score
+                    if caption_score > tags[word].caption_score:
+                        tags[word].word_score = word_score
+                        tags[word].caption_score = caption_score
+                        tags[word].caption_length = caption_length
+                        tags[word].caption_index = i
 
-    return tags
+    tags = list(tags.values())
+    t1 = sorted(tags, key=lambda t: t.score, reverse=True)
+
+    t2 = sorted(tags, key=lambda t: t.caption_score_compensated+t.word_score, reverse=True)
+
+    t3 = sorted(tags, key=cmp_to_key(compare_tags))
+    return t1, t2, t3
+
+
+def get_non_wanted_tags():
+    non_wanted_words = {'<start>', '<end>',
+                        'a', 'with', 'of', 'on', 'the', 'to', 'and', 'in', 'is', 'her', 'his', 'there', 'that', 'an',
+                        'next', 'who', 'while', 'at', 'he', 'she', 'up', 'using', 'each', 'other', 'are', 'something',
+                        'has', 'it', 'doing', 'their', 'for', '<unk>', 'for'}
+    return non_wanted_words
+
+
+class Tagger():
+    def __init__(self, model_checkpoint_file: Path, word_map_file: Path):
+        self.model_checkpoint_file = model_checkpoint_file
+        self.word_map_file = word_map_file
+
+        checkpoint = torch.load(self.model_checkpoint_file, map_location=str(device))
+        self.decoder = checkpoint['decoder']
+        self.decoder = self.decoder.to(device)
+        self.decoder.eval()
+        self.encoder = checkpoint['encoder']
+        self.encoder = self.encoder.to(device)
+        self.encoder.eval()
+
+        self.word_map = json.loads(self.word_map_file.read_text())
+
+    def tag(self, image_file: Path, beam_size=15):
+        # Encode, decode with attention and beam search
+        captions, scores, scores_per_word = caption_image_beam_search(self.encoder, self.decoder, image_file,
+                                                                      self.word_map, beam_size)
+        t1, t2, t3 = get_tags_from_captions(captions, scores, scores_per_word)
+
+        return {'score': t1, 'combined_score': t2, 'magic_score': t3}
 
 
 if __name__ == '__main__':
-    ROOT = Path(__file__).parent
+    ROOT = Path(__file__).parents[1]
 
     image_file = ROOT / 'images/test_03__001_2021_11_insp_vatertag_thementeaser_querformat_125642.jpg'
     model_checkpoint_file = ROOT / 'checkpoint/BEST_checkpoint_coco_5_cap_per_img_5_min_word_freq.pth.tar'
     word_map_file = ROOT / 'checkpoint/WORDMAP_coco_5_cap_per_img_5_min_word_freq.json'
-    beam_size = 105
 
+    tagger = Tagger(model_checkpoint_file=model_checkpoint_file, word_map_file=word_map_file)
 
-    # Load model
-    checkpoint = torch.load(model_checkpoint_file, map_location=str(device))
-    decoder = checkpoint['decoder']
-    decoder = decoder.to(device)
-    decoder.eval()
-    encoder = checkpoint['encoder']
-    encoder = encoder.to(device)
-    encoder.eval()
+    t = tagger.tag(image_file, beam_size=15)
 
-    # Load word map (word2ix)
-    word_map = json.loads(word_map_file.read_text())
-    # rev_word_map = {v: k for k, v in word_map.items()}  # ix2word
-
-    # Encode, decode with attention and beam search
-    captions, scores, scores_per_word = caption_image_beam_search(encoder, decoder, image_file, word_map, beam_size)
-    tags = get_tags_from_captions(captions, scores, scores_per_word)
-    pass
+    print(t)
