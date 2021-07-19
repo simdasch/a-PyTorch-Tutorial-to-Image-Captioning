@@ -1,3 +1,19 @@
+# Image Tagging using image captioning
+
+This repo was forked from https://github.com/sgrvinod/a-PyTorch-Tutorial-to-Image-Captioning 
+as a starting point. 
+
+This serves an analysis whether a (rather simple) **image captioning** model could
+be used for **image tagging**.
+
+The code was modified/ extended in these steps:
+1. The code was updated to work with pytorch 0.9.1 and a requirements file was added.
+2. Code to extract image tags from the captions was added
+
+Original repo readme starts below:
+
+---
+
 This is a **[PyTorch](https://pytorch.org) Tutorial to Image Captioning**.
 
 This is the first in [a series of tutorials](https://github.com/sgrvinod/Deep-Tutorials-for-PyTorch) I'm writing about _implementing_ cool models on your own with the amazing PyTorch library.
